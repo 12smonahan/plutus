@@ -1,63 +1,186 @@
 # Build Your Own Mint
 
+A personal finance engine that syncs your bank transactions via [Plaid](https://plaid.com/) into a local SQLite database and exposes a REST API for querying transactions, balances, budgets, and net worth.
+
 ## Important Disclaimer
 
-All this repo does is talk to Plaid/Google APIs and write tokens to your local file system. If you don't feel safe entering real bank credentials, audit the code yourself to make sure.
+All this repo does is talk to the Plaid API and store data locally on your machine. No data is sent to any third party beyond Plaid. If you don't feel safe entering real bank credentials, audit the code yourself to make sure.
 
-## Install Dependencies
+## Quick Start
 
-This project uses Node.js. Run `npm install` in the repo root to install necessary dependencies.
+```bash
+npm install
+cp .env.sample .env
+# Fill in your Plaid credentials in .env
+npm run link chase        # Connect a bank account
+npm start                 # Start the server on port 3000
+```
 
-## Setting up API keys
+## Setup
 
-First things first - rename `.env.sample` to `.env`. Variables in this file will be loaded as environment variables. This file is ignored by Git.
+### 1. Install Dependencies
 
-### Plaid
+Requires Node.js 18+.
 
-- You will first need to sign up for [Plaid](https://plaid.com/) and apply for the development plan. You might need to wait for a day or two to get approved. It's free and limited to 100 items (i.e. banks), so it should be more than enough for your personal use.
+```bash
+npm install
+```
 
-- Once approved, fill out the following in `.env`:
+### 2. Configure Environment
 
-  - `PLAID_CLIENT_ID`
-  - `PLAID_SECRET`
-  - `PLAID_PUBLIC_KEY`
+Rename `.env.sample` to `.env` and fill in your credentials:
 
-- Now you need to connect to your financial institutions to generate access tokens.
+```
+PLAID_CLIENT_ID=        # From Plaid dashboard
+PLAID_SECRET=           # From Plaid dashboard
+PLAID_ENV=sandbox       # sandbox, development, or production
+PORT=3000               # Server port (default: 3000)
+SYNC_CRON=0 5 * * *    # Auto-sync schedule (default: daily at 5 AM UTC)
+```
 
-  Run `npm run token-plaid <account>` where `account` is an id for the bank you want to connect (it's for your personal reference, so you can name it anything). This will start a local server which you can visit in your browser and go through the authentication flow. Once you've linked the bank, its associated access token will be saved in `.env`.
+### 3. Get Plaid Credentials
 
-  This process needs to be repeated for each bank you want to connect. Make sure to run each with a different `account` name.
+Sign up for [Plaid](https://plaid.com/) and apply for the development plan. It's free and limited to 100 items (i.e. banks), which is more than enough for personal use. Once approved, copy your **Client ID** and **Secret** from the Plaid dashboard into `.env`.
 
-- If you've done everything correctly, running `npm run test-plaid` now should log the recent transactions in your connected accounts.
+You do **not** need a public key — the modern Plaid API uses Link tokens instead.
 
-### Google Sheets
+### 4. Connect Bank Accounts
 
-> I use a Google Sheet because it's convenient. If you don't trust Google or want to build your own fancy interface, you can totally do that - but that's out of scope for this demo.
+```bash
+npm run link <account-name>
+```
 
-- First, create a Google Sheets spreadsheet, and save its ID in `.env` as `SHEETS_SHEET_ID`.
+This starts a local server at `http://localhost:8080` where you can authenticate with your bank via Plaid Link. The access token is saved to both the database and your `.env` file.
 
-- Then, go to [Google Sheets API Quickstart](https://developers.google.com/sheets/api/quickstart/nodejs), and click the "Enable the Google Sheets API" button. Follow instructions and download the credentials JSON file. Take a look at the file and fill in the following fields in `.env`:
+Repeat for each bank you want to connect, using a different account name each time:
 
-  - `SHEETS_CLIENT_ID`
-  - `SHEETS_CLIENT_SECRET`
-  - `SHEETS_REDIRECT_URI` (use the first item in `redirect_uri`)
+```bash
+npm run link chase
+npm run link schwab
+```
 
-- Run `npm run token-sheets`. This will prompt for auth and save the token in `.env`.
+### 5. Start the Server
 
-- Now run `npm run test-sheets`. You should see your sheet's cell A1 with "It worked!".
+```bash
+npm start
+```
 
-## Transform your Data
+This starts the Express server, creates the SQLite database at `data/mint.db`, and registers the cron scheduler for automatic syncing.
 
-- With the APIs sorted out, now it's time to connect them. Open `lib/transform.js` - this is where you can write your own logic to map incoming transactions to cell updates. How to structure the spreadsheet to use that data is up to you.
+### 6. Initial Sync
 
-- By default, the transaction date range is from the beginning of last month to now. You can adjust this in `lib/fetch.js`.
+Trigger your first sync to pull transaction history:
 
-- Once you've setup your own transform logic, run `node index.js`. If everything works, your spreadsheet should have been updated.
+```bash
+curl -X POST http://localhost:3000/api/sync
+```
 
-- This repo only handles transactions, but it should be pretty straightforward to add balances. (logic for fetching balances is in `fetch.js` already)
+The first sync pulls up to 2 years of history. Subsequent syncs are incremental (only new/modified/removed transactions).
 
-## Automate the Updates
+## API Reference
 
-The repo contains a [CircleCI](https://circleci.com/) config file which runs the update every day at 5AM UTC (midnight US Eastern time). You can adjust the cron config to tweak the time/frequency of the updates. Note that your local `.env` is not checked into the repo, so you will need to copy all those env variables into your CircleCI project settings.
+All endpoints are under `/api/`.
 
-This is totally optional if you don't trust CI with your tokens. Just run it manually when you want to update things.
+### Transactions
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/transactions` | List transactions with optional filters |
+| GET | `/api/transactions/summary` | Aggregated spending by category, month, or account |
+
+**Query parameters for `/api/transactions`:**
+- `start_date`, `end_date` — date range (YYYY-MM-DD)
+- `account_id` — filter by account
+- `category` — filter by category
+- `search` — search by name or merchant
+- `limit` (default: 100, max: 500), `offset` — pagination
+
+**Query parameters for `/api/transactions/summary`:**
+- `group_by` — `category` (default), `month`, or `account`
+- `start_date`, `end_date`, `account_id` — filters
+
+### Accounts & Balances
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/accounts` | All linked accounts with latest balance |
+| GET | `/api/balances` | Latest balance per account |
+| GET | `/api/balances/history` | Balance snapshots over time |
+
+### Net Worth
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/networth` | Net worth (assets − liabilities) with breakdown |
+
+### Budgets
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/budgets` | List budgets (optionally for a `?month=YYYY-MM` with actual vs. budgeted) |
+| POST | `/api/budgets` | Create/update a budget (`{ category, month, amount }`) |
+| DELETE | `/api/budgets/:id` | Delete a budget |
+
+### Sync
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/sync` | Trigger an immediate sync of all linked accounts |
+| GET | `/api/sync/status` | Last sync time and stats per institution |
+
+### Plaid Link
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/link/token` | Create a Plaid Link token |
+| POST | `/api/link/exchange` | Exchange a public token for an access token (`{ public_token, alias }`) |
+
+### Health
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/health` | Health check |
+
+## Project Structure
+
+```
+index.js                    # Express server + scheduler entrypoint
+data/
+  .gitkeep                  # mint.db created at runtime
+lib/
+  db.js                     # SQLite setup + schema
+  plaidClient.js            # Plaid SDK client
+  fetch.js                  # Plaid API wrappers
+  sync.js                   # Sync orchestration
+  scheduler.js              # node-cron wrapper
+  routes/
+    transactions.js
+    accounts.js
+    balances.js
+    budgets.js
+    sync.js
+    networth.js
+    link.js
+scripts/
+  plaidServer.js            # Standalone Plaid Link flow for connecting banks
+  saveEnv.js                # Helper to write .env values
+  testPlaid.js              # Test Plaid connection
+```
+
+## Automatic Syncing
+
+The server runs a cron job to sync transactions automatically. By default this runs daily at 5 AM UTC. Configure it via the `SYNC_CRON` environment variable using standard cron syntax:
+
+```
+SYNC_CRON=0 5 * * *      # Daily at 5 AM UTC (default)
+SYNC_CRON=0 */6 * * *    # Every 6 hours
+SYNC_CRON=0 5,17 * * *   # Twice daily at 5 AM and 5 PM UTC
+```
+
+You can also trigger a sync at any time via `POST /api/sync`.
+
+## Testing
+
+```bash
+npm run test-plaid    # Verify Plaid connection and fetch sample data
+```
