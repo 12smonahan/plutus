@@ -1,300 +1,158 @@
-const dotenv = require('dotenv')
-dotenv.config()
+require('dotenv').config();
 
-const account = process.argv[2]
+const path = require('path');
+const express = require('express');
+const { CountryCode, Products } = require('plaid');
+const client = require('../lib/plaidClient');
+const db = require('../lib/db');
+const saveEnv = require('./saveEnv');
+
+const account = process.argv[2];
 if (!account) {
-  throw new Error('An account name must be provided.')
+  console.error('Usage: node scripts/plaidServer.js <account-name>');
+  console.error('Example: node scripts/plaidServer.js chase');
+  process.exit(1);
 }
 
-const fs = require('fs')
-const util = require('util')
-const path = require('path')
-const moment = require('moment')
-const express = require('express')
-const bodyParser = require('body-parser')
-const client = require('../lib/plaidClient')
-const saveEnv = require('./saveEnv')
+const app = express();
+app.use(express.json());
 
-const app = express()
-app.use(express.static(path.resolve(__dirname)))
-app.set('view engine', 'ejs')
-app.use(bodyParser.urlencoded({
-  extended: false
-}))
-app.use(bodyParser.json())
+const PORT = 8080;
 
-app.get('/', (req, res, next) => {
-  res.render(path.resolve(__dirname, 'plaid.ejs'), {
-    PLAID_ACCOUNT: account,
-    PLAID_PUBLIC_KEY: process.env.PLAID_PUBLIC_KEY
-  })
-})
+app.get('/', (req, res) => {
+  res.send(`<!DOCTYPE html>
+<html>
+<head>
+  <title>Link Account: ${account}</title>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: -apple-system, system-ui, sans-serif; max-width: 600px; margin: 60px auto; padding: 0 20px; }
+    h1 { color: #333; }
+    button { background: #0066ff; color: #fff; border: none; padding: 12px 24px; font-size: 16px; border-radius: 6px; cursor: pointer; }
+    button:hover { background: #0052cc; }
+    #result { margin-top: 20px; padding: 16px; background: #f5f5f5; border-radius: 6px; display: none; white-space: pre-wrap; font-family: monospace; }
+    .success { background: #e6f9e6 !important; }
+    .error { background: #ffe6e6 !important; }
+  </style>
+</head>
+<body>
+  <h1>Link Account: ${account}</h1>
+  <p>Click the button below to connect your bank account via Plaid.</p>
+  <button id="link-btn" disabled>Loading Plaid Link...</button>
+  <div id="result"></div>
 
-const APP_PORT = 8080
-let PUBLIC_TOKEN = null
-let ITEM_ID = null
+  <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+  <script>
+    const resultEl = document.getElementById('result');
+    const linkBtn = document.getElementById('link-btn');
 
-function saveAccessToken(token) {
-  console.log()
-  console.log(`Saving access token for account "${account}": ${token}`)
-  saveEnv({
-    [`PLAID_TOKEN_${account}`]: token
-  })
-  console.log('Saved.')
-  console.log()
-}
-
-// Exchange token flow - exchange a Link public_token for
-// an API access_token
-// https://plaid.com/docs/#exchange-token-flow
-app.post('/get_access_token', function(request, response, next) {
-  PUBLIC_TOKEN = request.body.public_token;
-  client.exchangePublicToken(PUBLIC_TOKEN, function(error, tokenResponse) {
-    if (error != null) {
-      prettyPrintResponse(error);
-      return response.json({
-        error: error,
-      });
-    }
-    ACCESS_TOKEN = tokenResponse.access_token;
-    saveAccessToken(ACCESS_TOKEN)
-    ITEM_ID = tokenResponse.item_id;
-    prettyPrintResponse(tokenResponse);
-    response.json({
-      access_token: ACCESS_TOKEN,
-      item_id: ITEM_ID,
-      error: null,
-    });
-  });
-});
-
-
-// Retrieve Transactions for an Item
-// https://plaid.com/docs/#transactions
-app.get('/transactions', function(request, response, next) {
-  // Pull transactions for the Item for the last 30 days
-  var startDate = moment().subtract(30, 'days').format('YYYY-MM-DD');
-  var endDate = moment().format('YYYY-MM-DD');
-  client.getTransactions(ACCESS_TOKEN, startDate, endDate, {
-    count: 250,
-    offset: 0,
-  }, function(error, transactionsResponse) {
-    if (error != null) {
-      prettyPrintResponse(error);
-      return response.json({
-        error: error
-      });
-    } else {
-      prettyPrintResponse(transactionsResponse);
-      response.json({error: null, transactions: transactionsResponse});
-    }
-  });
-});
-
-// Retrieve Identity for an Item
-// https://plaid.com/docs/#identity
-app.get('/identity', function(request, response, next) {
-  client.getIdentity(ACCESS_TOKEN, function(error, identityResponse) {
-    if (error != null) {
-      prettyPrintResponse(error);
-      return response.json({
-        error: error,
-      });
-    }
-    prettyPrintResponse(identityResponse);
-    response.json({error: null, identity: identityResponse});
-  });
-});
-
-// Retrieve real-time Balances for each of an Item's accounts
-// https://plaid.com/docs/#balance
-app.get('/balance', function(request, response, next) {
-  client.getBalance(ACCESS_TOKEN, function(error, balanceResponse) {
-    if (error != null) {
-      prettyPrintResponse(error);
-      return response.json({
-        error: error,
-      });
-    }
-    prettyPrintResponse(balanceResponse);
-    response.json({error: null, balance: balanceResponse});
-  });
-});
-
-// Retrieve an Item's accounts
-// https://plaid.com/docs/#accounts
-app.get('/accounts', function(request, response, next) {
-  client.getAccounts(ACCESS_TOKEN, function(error, accountsResponse) {
-    if (error != null) {
-      prettyPrintResponse(error);
-      return response.json({
-        error: error,
-      });
-    }
-    prettyPrintResponse(accountsResponse);
-    response.json({error: null, accounts: accountsResponse});
-  });
-});
-
-// Retrieve ACH or ETF Auth data for an Item's accounts
-// https://plaid.com/docs/#auth
-app.get('/auth', function(request, response, next) {
-  client.getAuth(ACCESS_TOKEN, function(error, authResponse) {
-    if (error != null) {
-      prettyPrintResponse(error);
-      return response.json({
-        error: error,
-      });
-    }
-    prettyPrintResponse(authResponse);
-    response.json({error: null, auth: authResponse});
-  });
-});
-
-// Create and then retrieve an Asset Report for one or more Items. Note that an
-// Asset Report can contain up to 100 items, but for simplicity we're only
-// including one Item here.
-// https://plaid.com/docs/#assets
-app.get('/assets', function(request, response, next) {
-  // You can specify up to two years of transaction history for an Asset
-  // Report.
-  var daysRequested = 10;
-
-  // The `options` object allows you to specify a webhook for Asset Report
-  // generation, as well as information that you want included in the Asset
-  // Report. All fields are optional.
-  var options = {
-    client_report_id: 'Custom Report ID #123',
-    // webhook: 'https://your-domain.tld/plaid-webhook',
-    user: {
-      client_user_id: 'Custom User ID #456',
-      first_name: 'Alice',
-      middle_name: 'Bobcat',
-      last_name: 'Cranberry',
-      ssn: '123-45-6789',
-      phone_number: '555-123-4567',
-      email: 'alice@example.com',
-    },
-  };
-  client.createAssetReport(
-    [ACCESS_TOKEN],
-    daysRequested,
-    options,
-    function(error, assetReportCreateResponse) {
-      if (error != null) {
-        prettyPrintResponse(error);
-        return response.json({
-          error: error,
+    fetch('/create_link_token', { method: 'POST' })
+      .then(r => r.json())
+      .then(data => {
+        const handler = Plaid.create({
+          token: data.link_token,
+          onSuccess: (publicToken, metadata) => {
+            resultEl.style.display = 'block';
+            resultEl.textContent = 'Exchanging token...';
+            fetch('/exchange', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ public_token: publicToken, institution: metadata.institution?.name }),
+            })
+              .then(r => r.json())
+              .then(result => {
+                if (result.error) {
+                  resultEl.className = 'error';
+                  resultEl.textContent = 'Error: ' + result.error;
+                } else {
+                  resultEl.className = 'success';
+                  resultEl.textContent = 'Success! Account linked.\\n\\nItem ID: ' + result.item_id +
+                    '\\nInstitution: ' + (result.institution_name || 'N/A') +
+                    '\\n\\nAccess token saved to .env and database.' +
+                    '\\nYou can close this window and start your server.';
+                }
+              });
+          },
+          onExit: (err) => {
+            if (err) {
+              resultEl.style.display = 'block';
+              resultEl.className = 'error';
+              resultEl.textContent = 'Link exited with error: ' + JSON.stringify(err);
+            }
+          },
         });
-      }
-      prettyPrintResponse(assetReportCreateResponse);
-
-      var assetReportToken = assetReportCreateResponse.asset_report_token;
-      respondWithAssetReport(20, assetReportToken, client, response);
-    },
-  );
-});
-
-// Retrieve information about an Item
-// https://plaid.com/docs/#retrieve-item
-app.get('/item', function(request, response, next) {
-  // Pull the Item - this includes information about available products,
-  // billed products, webhook information, and more.
-  client.getItem(ACCESS_TOKEN, function(error, itemResponse) {
-    if (error != null) {
-      prettyPrintResponse(error);
-      return response.json({
-        error: error
+        linkBtn.disabled = false;
+        linkBtn.textContent = 'Connect Bank Account';
+        linkBtn.onclick = () => handler.open();
       });
-    }
-    // Also pull information about the institution
-    client.getInstitutionById(itemResponse.item.institution_id, function(err, instRes) {
-      if (err != null) {
-        var msg = 'Unable to pull institution information from the Plaid API.';
-        console.log(msg + '\n' + JSON.stringify(error));
-        return response.json({
-          error: msg
-        });
-      } else {
-        prettyPrintResponse(itemResponse);
-        response.json({
-          item: itemResponse.item,
-          institution: instRes.institution,
-        });
-      }
-    });
-  });
+  </script>
+</body>
+</html>`);
 });
 
-var server = app.listen(APP_PORT, function() {
-  console.log(`Server started at http://localhost:${APP_PORT}`);
-});
-
-var prettyPrintResponse = response => {
-  console.log(util.inspect(response, {colors: true, depth: 4}));
-};
-
-// This is a helper function to poll for the completion of an Asset Report and
-// then send it in the response to the client. Alternatively, you can provide a
-// webhook in the `options` object in your `/asset_report/create` request to be
-// notified when the Asset Report is finished being generated.
-var respondWithAssetReport = (
-  numRetriesRemaining,
-  assetReportToken,
-  client,
-  response,
-) => {
-  if (numRetriesRemaining == 0) {
-    return response.json({
-      error: 'Timed out when polling for Asset Report',
+app.post('/create_link_token', async (req, res) => {
+  try {
+    const response = await client.linkTokenCreate({
+      user: { client_user_id: 'build-your-own-mint' },
+      client_name: 'Build Your Own Mint',
+      products: [Products.Transactions],
+      country_codes: [CountryCode.Us],
+      language: 'en',
     });
+    res.json({ link_token: response.data.link_token });
+  } catch (err) {
+    console.error('Failed to create link token:', err.message);
+    res.status(500).json({ error: err.message });
   }
+});
 
-  client.getAssetReport(
-    assetReportToken,
-    function(error, assetReportGetResponse) {
-      if (error != null) {
-        prettyPrintResponse(error);
-        if (error.error_code == 'PRODUCT_NOT_READY') {
-          setTimeout(
-            () => respondWithAssetReport(
-              --numRetriesRemaining, assetReportToken, client, response),
-            1000,
-          );
-          return
-        }
+app.post('/exchange', async (req, res) => {
+  const { public_token, institution } = req.body;
+  try {
+    const response = await client.itemPublicTokenExchange({ public_token });
+    const { access_token, item_id } = response.data;
 
-        return response.json({
-          error: error,
+    // Get institution info
+    let institutionName = institution || null;
+    try {
+      const itemResponse = await client.itemGet({ access_token });
+      const institutionId = itemResponse.data.item.institution_id;
+      if (institutionId) {
+        const instResponse = await client.institutionsGetById({
+          institution_id: institutionId,
+          country_codes: [CountryCode.Us],
         });
+        institutionName = instResponse.data.institution.name;
       }
+    } catch (e) {
+      // Institution name is nice-to-have
+    }
 
-      client.getAssetReportPdf(
-        assetReportToken,
-        function(error, assetReportGetPdfResponse) {
-          if (error != null) {
-            return response.json({
-              error: error,
-            });
-          }
+    // Save to database
+    db.prepare(`
+      INSERT INTO plaid_items (item_id, access_token, alias, institution_name)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(item_id) DO UPDATE SET
+        access_token = excluded.access_token,
+        alias = excluded.alias,
+        institution_name = excluded.institution_name
+    `).run(item_id, access_token, account, institutionName);
 
-          response.json({
-            error: null,
-            json: assetReportGetResponse.report,
-            pdf: assetReportGetPdfResponse.buffer.toString('base64'),
-          })
-        },
-      );
-    },
-  );
-};
+    // Save to .env for backward compatibility
+    saveEnv({ [`PLAID_TOKEN_${account}`]: access_token });
 
-app.post('/set_access_token', function(request, response, next) {
-  ACCESS_TOKEN = request.body.access_token;
-  client.getItem(ACCESS_TOKEN, function(error, itemResponse) {
-    response.json({
-      item_id: itemResponse.item.item_id,
-      error: false,
-    });
-  });
+    console.log(`\nAccount "${account}" linked successfully!`);
+    console.log(`  Item ID: ${item_id}`);
+    console.log(`  Institution: ${institutionName || 'N/A'}\n`);
+
+    res.json({ item_id, institution_name: institutionName });
+  } catch (err) {
+    console.error('Exchange failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`\nPlaid Link server started at http://localhost:${PORT}`);
+  console.log(`Open the URL above in your browser to connect account "${account}"\n`);
 });
