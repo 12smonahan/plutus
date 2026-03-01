@@ -94,7 +94,7 @@ app.post('/create_link_token', async (req, res) => {
   try {
     const response = await client.linkTokenCreate({
       user: { client_user_id: 'build-your-own-mint' },
-      client_name: 'Build Your Own Mint',
+      client_name: 'plutus',
       products: [Products.Transactions],
       country_codes: [CountryCode.Us],
       language: 'en',

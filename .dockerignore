@@ -1,0 +1,11 @@
+node_modules
+.git
+.gitignore
+.env
+.env.*
+!.env.sample
+data/*.db
+data/*.db-wal
+data/*.db-shm
+.DS_Store
+.claude

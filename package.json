@@ -1,20 +1,33 @@
 {
-  "name": "build-your-own-mint",
+  "name": "plutus",
+  "version": "1.0.0",
+  "description": "AI agent-first personal finance engine. Syncs bank data via Plaid into SQLite and exposes it through a REST API and MCP server for AI agents.",
   "private": true,
   "main": "index.js",
-  "author": "Evan You",
+  "author": "Sean Monahan",
   "license": "MIT",
+  "keywords": [
+    "personal-finance",
+    "plaid",
+    "mcp",
+    "ai-agent",
+    "sqlite",
+    "rest-api"
+  ],
   "scripts": {
     "start": "node index.js",
+    "mcp": "node mcp/server.mjs",
     "link": "node scripts/plaidServer.js",
     "test-plaid": "node scripts/testPlaid.js"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
     "better-sqlite3": "^11.0.0",
     "date-fns": "^3.6.0",
     "dotenv": "^16.4.0",
     "express": "^4.21.0",
     "node-cron": "^3.0.3",
-    "plaid": "^33.0.0"
+    "plaid": "^33.0.0",
+    "zod": "^3.24.0"
   }
 }

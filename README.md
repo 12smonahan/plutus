@@ -1,10 +1,42 @@
-# Build Your Own Mint
+# Plutus
 
-A personal finance engine that syncs your bank transactions via [Plaid](https://plaid.com/) into a local SQLite database and exposes a REST API for querying transactions, balances, budgets, and net worth.
+**AI agent-first personal finance engine.** Syncs your bank data via [Plaid](https://plaid.com/) into a local SQLite database and exposes it through a REST API and [MCP](https://modelcontextprotocol.io/) server — designed for personal AI agents to query your finances, track spending, and manage budgets.
 
-## Important Disclaimer
+```
+┌──────────────┐     ┌──────────────┐     ┌──────────────────────┐
+│  Your Banks  │────▶│   Plaid API  │────▶│       Plutus         │
+└──────────────┘     └──────────────┘     │                      │
+                                          │  ┌────────────────┐  │
+                                          │  │ SQLite (mint.db)│  │
+                                          │  └───────┬────────┘  │
+                                          │          │           │
+                                          │  ┌───────▼────────┐  │
+                                          │  │  REST API :3000 │  │
+                                          │  └───────┬────────┘  │
+                                          └──────────┼───────────┘
+                                                     │
+                                    ┌────────────────┼────────────────┐
+                                    │                │                │
+                              ┌─────▼─────┐   ┌─────▼─────┐   ┌─────▼─────┐
+                              │ MCP Server│   │   curl /   │   │  Your App │
+                              │ (stdio)   │   │  scripts   │   │           │
+                              └─────┬─────┘   └───────────┘   └───────────┘
+                                    │
+                              ┌─────▼─────┐
+                              │ AI Agent  │
+                              │ (Claude,  │
+                              │  etc.)    │
+                              └───────────┘
+```
 
-All this repo does is talk to the Plaid API and store data locally on your machine. No data is sent to any third party beyond Plaid. If you don't feel safe entering real bank credentials, audit the code yourself to make sure.
+## How It Works
+
+1. **Connect** your bank accounts via Plaid Link
+2. **Sync** pulls transactions and balances into a local SQLite database
+3. **Query** your financial data through the REST API or MCP server
+4. **Automate** — a cron scheduler keeps data fresh automatically
+
+All data stays on your machine. No third parties beyond Plaid.
 
 ## Quick Start
 
@@ -12,8 +44,10 @@ All this repo does is talk to the Plaid API and store data locally on your machi
 npm install
 cp .env.sample .env
 # Fill in your Plaid credentials in .env
-npm run link chase        # Connect a bank account
-npm start                 # Start the server on port 3000
+
+npm run link chase          # Connect a bank account
+npm start                   # Start the server on port 3000
+curl -X POST localhost:3000/api/sync   # Pull transactions
 ```
 
 ## Setup
@@ -40,9 +74,7 @@ SYNC_CRON=0 5 * * *    # Auto-sync schedule (default: daily at 5 AM UTC)
 
 ### 3. Get Plaid Credentials
 
-Sign up for [Plaid](https://plaid.com/) and apply for the development plan. It's free and limited to 100 items (i.e. banks), which is more than enough for personal use. Once approved, copy your **Client ID** and **Secret** from the Plaid dashboard into `.env`.
-
-You do **not** need a public key — the modern Plaid API uses Link tokens instead.
+Sign up for [Plaid](https://plaid.com/) and apply for the development plan. It's free and limited to 100 items (i.e. banks), which is more than enough for personal use. Copy your **Client ID** and **Secret** from the Plaid dashboard into `.env`.
 
 ### 4. Connect Bank Accounts
 
@@ -52,7 +84,7 @@ npm run link <account-name>
 
 This starts a local server at `http://localhost:8080` where you can authenticate with your bank via Plaid Link. The access token is saved to both the database and your `.env` file.
 
-Repeat for each bank you want to connect, using a different account name each time:
+Repeat for each bank:
 
 ```bash
 npm run link chase
@@ -65,17 +97,15 @@ npm run link schwab
 npm start
 ```
 
-This starts the Express server, creates the SQLite database at `data/mint.db`, and registers the cron scheduler for automatic syncing.
+Starts the Express server, creates the SQLite database at `data/mint.db`, and registers the cron scheduler.
 
 ### 6. Initial Sync
-
-Trigger your first sync to pull transaction history:
 
 ```bash
 curl -X POST http://localhost:3000/api/sync
 ```
 
-The first sync pulls up to 2 years of history. Subsequent syncs are incremental (only new/modified/removed transactions).
+The first sync pulls up to 2 years of history. Subsequent syncs are incremental.
 
 ## API Reference
 
@@ -111,7 +141,7 @@ All endpoints are under `/api/`.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/networth` | Net worth (assets − liabilities) with breakdown |
+| GET | `/api/networth` | Net worth (assets - liabilities) with breakdown |
 
 ### Budgets
 
@@ -141,10 +171,53 @@ All endpoints are under `/api/`.
 |--------|----------|-------------|
 | GET | `/api/health` | Health check |
 
+## MCP Integration
+
+The MCP server lets AI agents interact with your financial data natively. It runs as a stdio process that calls the REST API internally.
+
+**Start the server** (the Express API must be running separately):
+
+```bash
+npm run mcp
+```
+
+### Claude Desktop Configuration
+
+Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "plutus": {
+      "command": "node",
+      "args": ["/absolute/path/to/plutus/mcp/server.mjs"],
+      "env": {
+        "PLUTUS_URL": "http://localhost:3000"
+      }
+    }
+  }
+}
+```
+
+### Available MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `query_transactions` | Search/filter transactions |
+| `spending_summary` | Aggregated spending by category/month/account |
+| `get_accounts` | List linked accounts with balances |
+| `get_balances` | Latest balance per account |
+| `get_balance_history` | Historical balance snapshots |
+| `get_net_worth` | Assets minus liabilities breakdown |
+| `manage_budgets` | List/set/delete budgets |
+| `trigger_sync` | Sync all linked banks via Plaid |
+
 ## Project Structure
 
 ```
 index.js                    # Express server + scheduler entrypoint
+mcp/
+  server.mjs                # MCP stdio server (ESM, wraps REST API)
 data/
   .gitkeep                  # mint.db created at runtime
 lib/
@@ -167,20 +240,57 @@ scripts/
   testPlaid.js              # Test Plaid connection
 ```
 
-## Automatic Syncing
+## Auto-Syncing
 
-The server runs a cron job to sync transactions automatically. By default this runs daily at 5 AM UTC. Configure it via the `SYNC_CRON` environment variable using standard cron syntax:
+The server runs a cron job to sync transactions automatically. Configure via `SYNC_CRON`:
 
 ```
 SYNC_CRON=0 5 * * *      # Daily at 5 AM UTC (default)
 SYNC_CRON=0 */6 * * *    # Every 6 hours
-SYNC_CRON=0 5,17 * * *   # Twice daily at 5 AM and 5 PM UTC
+SYNC_CRON=0 5,17 * * *   # Twice daily
 ```
 
-You can also trigger a sync at any time via `POST /api/sync`.
+You can also trigger a sync anytime via `POST /api/sync`.
 
-## Testing
+## Docker
+
+### Quick Start
 
 ```bash
-npm run test-plaid    # Verify Plaid connection and fetch sample data
+docker compose up -d
 ```
+
+This builds the image, starts the container, and mounts `./data` for SQLite persistence. The server is available at `http://localhost:3000`.
+
+### Manual Build & Run
+
+```bash
+docker build -t plutus .
+docker run -d \
+  --name plutus \
+  -p 3000:3000 \
+  --env-file .env \
+  -v ./data:/app/data \
+  --restart unless-stopped \
+  plutus
+```
+
+### Notes
+
+- **Volume mount**: `./data:/app/data` persists the SQLite database across container restarts. Without this, data is lost when the container is removed.
+- **Port mapping**: Change `3000:3000` to `<host-port>:3000` to use a different host port, or set `PORT` in `.env` and update both sides.
+- **Health check**: The container has a built-in health check against `/api/health`. Check status with `docker inspect --format='{{.State.Health.Status}}' plutus`.
+- **Multi-stage build**: Native dependencies (`better-sqlite3`) are compiled in a build stage with `python3`/`make`/`g++`, keeping the production image slim.
+
+### Commands
+
+```bash
+docker compose up -d         # Start in background
+docker compose down          # Stop and remove container
+docker compose logs -f       # Follow logs
+docker compose build         # Rebuild image after code changes
+```
+
+## Acknowledgments
+
+Originally inspired by [Build Your Own Mint](https://github.com/yyx990803/build-your-own-mint) by Evan You.
