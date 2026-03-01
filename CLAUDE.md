@@ -9,10 +9,13 @@ Plaid API  →  sync.js  →  SQLite (data/mint.db)  →  Express REST API (:300
                                                   →  MCP stdio server (mcp/server.mjs)
 ```
 
-- **Data pipeline**: Plaid SDK → fetch.js → sync.js → SQLite
-- **REST API**: Express server in index.js, routes in lib/routes/
+- **Data pipeline**: Plaid SDK → fetch.js (with retry) → sync.js → SQLite
+- **REST API**: Express server in index.js, routes in lib/routes/, central error handler
 - **MCP server**: Standalone stdio process (ESM) that calls the REST API via HTTP — no direct DB access
 - **Scheduler**: node-cron auto-syncs on a configurable schedule
+- **Error handling**: Central middleware in lib/middleware/errorHandler.js, asyncHandler wrapper for async routes
+- **Input validation**: lib/middleware/validate.js — date, month, number validators used across routes
+- **Plaid resilience**: Exponential backoff retry in fetch.js, error code detection in sync.js, item status tracking
 - **Docker**: Multi-stage Alpine build (build stage compiles `better-sqlite3` native deps, production stage is slim)
 
 ## Key Files
@@ -25,6 +28,10 @@ Plaid API  →  sync.js  →  SQLite (data/mint.db)  →  Express REST API (:300
 | `lib/fetch.js` | Plaid API wrappers (fetch accounts, sync transactions) |
 | `lib/sync.js` | Sync orchestration (iterates plaid_items, calls fetch, writes DB) |
 | `lib/scheduler.js` | node-cron wrapper for auto-sync |
+| `lib/plaidLink.js` | Shared Plaid Link token/exchange logic |
+| `lib/logger.js` | Pino structured logger |
+| `lib/middleware/errorHandler.js` | Central error handler + asyncHandler wrapper |
+| `lib/middleware/validate.js` | Input validation helpers (dates, numbers) |
 | `lib/routes/*.js` | Express route handlers |
 | `mcp/server.mjs` | MCP stdio server (ESM, wraps REST API) |
 | `scripts/plaidServer.js` | Standalone Plaid Link flow for connecting banks |
@@ -43,6 +50,9 @@ Plaid API  →  sync.js  →  SQLite (data/mint.db)  →  Express REST API (:300
 | institution_name | TEXT | |
 | last_synced_at | TEXT | |
 | created_at | TEXT | Default now |
+| status | TEXT | Default 'good'. Values: good, login_required, error |
+| error_code | TEXT | Plaid error code (e.g. ITEM_LOGIN_REQUIRED) |
+| error_message | TEXT | Human-readable error message |
 
 ### accounts
 | Column | Type | Notes |
@@ -108,7 +118,7 @@ GET    /api/budgets                 List budgets (?month=YYYY-MM for actuals)
 POST   /api/budgets                 Create/update budget { category, month, amount }
 DELETE /api/budgets/:id             Delete budget
 POST   /api/sync                    Trigger sync
-GET    /api/sync/status             Sync status per institution
+GET    /api/sync/status             Sync status per institution (includes error_code, status)
 POST   /api/link/token              Create Plaid Link token
 POST   /api/link/exchange           Exchange public token { public_token, alias }
 GET    /api/health                  Health check
@@ -134,6 +144,7 @@ GET    /api/health                  Health check
 | PORT | No | 3000 | Express server port |
 | SYNC_CRON | No | `0 5 * * *` | Cron schedule for auto-sync |
 | DB_VERBOSE | No | — | Set to enable SQLite query logging |
+| PLAID_MAX_RETRIES | No | 3 | Max retries for transient Plaid API errors |
 
 ## Common Tasks
 

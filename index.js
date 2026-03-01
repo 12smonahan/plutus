@@ -4,6 +4,7 @@ const express = require('express');
 const db = require('./lib/db');
 const scheduler = require('./lib/scheduler');
 const log = require('./lib/logger');
+const { errorHandler } = require('./lib/middleware/errorHandler');
 
 const app = express();
 app.use(express.json());
@@ -21,6 +22,9 @@ app.use('/api/link', require('./lib/routes/link'));
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+
+// Central error handler (must be after all routes)
+app.use(errorHandler);
 
 // Migrate existing PLAID_TOKEN_* env vars into plaid_items table on first run
 function migrateEnvTokens() {
