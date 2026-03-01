@@ -2,9 +2,7 @@ require('dotenv').config();
 
 const path = require('path');
 const express = require('express');
-const { CountryCode, Products } = require('plaid');
-const client = require('../lib/plaidClient');
-const db = require('../lib/db');
+const { createLinkToken, exchangePublicToken } = require('../lib/plaidLink');
 const saveEnv = require('./saveEnv');
 
 const account = process.argv[2];
@@ -92,14 +90,8 @@ app.get('/', (req, res) => {
 
 app.post('/create_link_token', async (req, res) => {
   try {
-    const response = await client.linkTokenCreate({
-      user: { client_user_id: 'build-your-own-mint' },
-      client_name: 'plutus',
-      products: [Products.Transactions],
-      country_codes: [CountryCode.Us],
-      language: 'en',
-    });
-    res.json({ link_token: response.data.link_token });
+    const result = await createLinkToken();
+    res.json(result);
   } catch (err) {
     console.error('Failed to create link token:', err.message);
     res.status(500).json({ error: err.message });
@@ -107,45 +99,18 @@ app.post('/create_link_token', async (req, res) => {
 });
 
 app.post('/exchange', async (req, res) => {
-  const { public_token, institution } = req.body;
+  const { public_token } = req.body;
   try {
-    const response = await client.itemPublicTokenExchange({ public_token });
-    const { access_token, item_id } = response.data;
-
-    // Get institution info
-    let institutionName = institution || null;
-    try {
-      const itemResponse = await client.itemGet({ access_token });
-      const institutionId = itemResponse.data.item.institution_id;
-      if (institutionId) {
-        const instResponse = await client.institutionsGetById({
-          institution_id: institutionId,
-          country_codes: [CountryCode.Us],
-        });
-        institutionName = instResponse.data.institution.name;
-      }
-    } catch (e) {
-      // Institution name is nice-to-have
-    }
-
-    // Save to database
-    db.prepare(`
-      INSERT INTO plaid_items (item_id, access_token, alias, institution_name)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT(item_id) DO UPDATE SET
-        access_token = excluded.access_token,
-        alias = excluded.alias,
-        institution_name = excluded.institution_name
-    `).run(item_id, access_token, account, institutionName);
+    const result = await exchangePublicToken(public_token, account);
 
     // Save to .env for backward compatibility
-    saveEnv({ [`PLAID_TOKEN_${account}`]: access_token });
+    saveEnv({ [`PLAID_TOKEN_${account}`]: result.access_token });
 
     console.log(`\nAccount "${account}" linked successfully!`);
-    console.log(`  Item ID: ${item_id}`);
-    console.log(`  Institution: ${institutionName || 'N/A'}\n`);
+    console.log(`  Item ID: ${result.item_id}`);
+    console.log(`  Institution: ${result.institution_name || 'N/A'}\n`);
 
-    res.json({ item_id, institution_name: institutionName });
+    res.json({ item_id: result.item_id, institution_name: result.institution_name });
   } catch (err) {
     console.error('Exchange failed:', err.message);
     res.status(500).json({ error: err.message });

@@ -3,6 +3,7 @@ require('dotenv').config();
 const express = require('express');
 const db = require('./lib/db');
 const scheduler = require('./lib/scheduler');
+const log = require('./lib/logger');
 
 const app = express();
 app.use(express.json());
@@ -35,7 +36,7 @@ function migrateEnvTokens() {
 
   if (tokens.length === 0) return;
 
-  console.log(`Migrating ${tokens.length} existing PLAID_TOKEN_* env var(s) to database...`);
+  log.info({ count: tokens.length }, 'Migrating PLAID_TOKEN_* env vars to database');
   const insert = db.prepare(`
     INSERT OR IGNORE INTO plaid_items (item_id, access_token, alias)
     VALUES (?, ?, ?)
@@ -48,13 +49,43 @@ function migrateEnvTokens() {
     }
   });
   migrate();
-  console.log('Migration complete. Run POST /api/sync to fetch transaction data.');
+  log.info('Migration complete. Run POST /api/sync to fetch transaction data.');
 }
 
 migrateEnvTokens();
 
 const port = process.env.PORT || 3000;
-app.listen(port, '0.0.0.0', () => {
-  console.log(`Server running on http://localhost:${port}`);
+const server = app.listen(port, '0.0.0.0', () => {
+  log.info({ port }, 'Server running');
   scheduler.start();
+});
+
+// Graceful shutdown
+function shutdown(signal) {
+  log.info({ signal }, 'Shutting down gracefully');
+  server.close(() => {
+    log.info('HTTP server closed');
+    scheduler.stop();
+    log.info('Scheduler stopped');
+    db.close();
+    log.info('Database closed');
+    process.exit(0);
+  });
+
+  setTimeout(() => {
+    log.error('Forced shutdown after timeout');
+    process.exit(1);
+  }, 10000);
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
+process.on('uncaughtException', (err) => {
+  log.fatal({ err }, 'Uncaught exception');
+  shutdown('uncaughtException');
+});
+
+process.on('unhandledRejection', (reason) => {
+  log.error({ reason }, 'Unhandled rejection');
 });
